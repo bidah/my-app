@@ -1,4 +1,4 @@
-// simcast-template-version: 16
+// simcast-template-version: 17
 /**
  * simcast auth gate.
  *
