@@ -108,58 +108,6 @@ jobs:
           echo "udid=$UDID" >> "$GITHUB_OUTPUT"
           xcrun simctl list devices | grep -F "$UDID"
 
-      - name: Build and install the app
-        timeout-minutes: 60
-        if: inputs.mode == 'build'
-        env:
-          UDID: ${{ steps.sim.outputs.udid }}
-        run: |
-          set -euo pipefail
-          # Dependencies are already installed above, so skip prebuild's own install pass.
-          npx expo prebuild --platform ios --no-install
-          npx pod-install ios
-
-          WORKSPACE=$(find ios -maxdepth 1 -name '*.xcworkspace' | head -1)
-          [ -n "$WORKSPACE" ] || { echo "expo prebuild produced no .xcworkspace"; exit 1; }
-
-          SCHEME='${{ inputs.scheme }}'
-          [ -n "$SCHEME" ] || SCHEME=$(basename "$WORKSPACE" .xcworkspace)
-          echo "Building scheme '$SCHEME' from $WORKSPACE"
-
-          xcodebuild \
-            -workspace "$WORKSPACE" \
-            -scheme "$SCHEME" \
-            -configuration Release \
-            -sdk iphonesimulator \
-            -destination "id=$UDID" \
-            -derivedDataPath build/ios \
-            CODE_SIGNING_ALLOWED=NO \
-            -quiet \
-            build
-
-          APP=$(find build/ios/Build/Products/Release-iphonesimulator -maxdepth 1 -name '*.app' | head -1)
-          [ -n "$APP" ] || { echo "No .app produced"; exit 1; }
-          BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist")
-
-          xcrun simctl install "$UDID" "$APP"
-          xcrun simctl launch "$UDID" "$BUNDLE_ID"
-          echo "Launched $BUNDLE_ID"
-
-      - name: Start Expo Go
-        timeout-minutes: 15
-        if: inputs.mode == 'go'
-        run: |
-          set -euo pipefail
-          # `expo start --ios` targets the already-booted simulator and installs
-          # Expo Go itself. Metro stays local to the runner.
-          CI=1 nohup npx expo start --ios > expo-start.log 2>&1 &
-          disown
-          for _ in $(seq 1 60); do
-            curl -fsS http://127.0.0.1:8081/status >/dev/null 2>&1 && break
-            sleep 2
-          done
-          tail -20 expo-start.log || true
-
       - name: Start serve-sim
         timeout-minutes: 10
         run: |
@@ -231,7 +179,7 @@ jobs:
             -f state=success \
             -f "context=$STATUS_CONTEXT" \
             -f "target_url=$URL" \
-            -f "description=simulator stream live for ${{ inputs.minutes }}m"
+            -f "description=simulator live; app still building"
 
           echo "::notice title=simcast::$URL"
           {
@@ -239,8 +187,71 @@ jobs:
             echo
             echo "**[Open the simulator]($URL)** — live for ${{ inputs.minutes }} minutes."
             echo
+            echo "The app is still building; it will install itself into the running simulator."
+            echo
             echo "Anyone with this link can drive the simulator."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build and install the app
+        timeout-minutes: 60
+        if: inputs.mode == 'build'
+        env:
+          UDID: ${{ steps.sim.outputs.udid }}
+        run: |
+          set -euo pipefail
+          # Dependencies are already installed above, so skip prebuild's own install pass.
+          npx expo prebuild --platform ios --no-install
+          npx pod-install ios
+
+          WORKSPACE=$(find ios -maxdepth 1 -name '*.xcworkspace' | head -1)
+          [ -n "$WORKSPACE" ] || { echo "expo prebuild produced no .xcworkspace"; exit 1; }
+
+          SCHEME='${{ inputs.scheme }}'
+          [ -n "$SCHEME" ] || SCHEME=$(basename "$WORKSPACE" .xcworkspace)
+          echo "Building scheme '$SCHEME' from $WORKSPACE"
+
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -destination "id=$UDID" \
+            -derivedDataPath build/ios \
+            CODE_SIGNING_ALLOWED=NO \
+            -quiet \
+            build
+
+          APP=$(find build/ios/Build/Products/Release-iphonesimulator -maxdepth 1 -name '*.app' | head -1)
+          [ -n "$APP" ] || { echo "No .app produced"; exit 1; }
+          BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist")
+
+          xcrun simctl install "$UDID" "$APP"
+          xcrun simctl launch "$UDID" "$BUNDLE_ID"
+          echo "Launched $BUNDLE_ID"
+
+      - name: Start Expo Go
+        timeout-minutes: 15
+        if: inputs.mode == 'go'
+        run: |
+          set -euo pipefail
+          # `expo start --ios` targets the already-booted simulator and installs
+          # Expo Go itself. Metro stays local to the runner.
+          CI=1 nohup npx expo start --ios > expo-start.log 2>&1 &
+          disown
+          for _ in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:8081/status >/dev/null 2>&1 && break
+            sleep 2
+          done
+          tail -20 expo-start.log || true
+
+      - name: Report app installed
+        if: inputs.mode == 'build'
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state=success \
+            -f "context=$STATUS_CONTEXT" \
+            -f "target_url=${{ steps.tunnel.outputs.url }}" \
+            -f "description=app installed and running" || true
 
       - name: Hold the stream open
         run: |
