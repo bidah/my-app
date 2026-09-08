@@ -1,4 +1,4 @@
-// simcast-template-version: 2
+// simcast-template-version: 3
 /**
  * simcast auth gate.
  *
@@ -86,7 +86,17 @@ const server = http.createServer((req, res) => {
       port: TARGET_PORT,
       method: req.method,
       path: req.url,
-      headers: { ...req.headers, host: `${TARGET_HOST}:${TARGET_PORT}` },
+      // Do NOT rewrite Host. serve-sim derives the URLs it advertises to the
+      // browser from these headers; pointing them at 127.0.0.1:3200 makes the
+      // page open its control WebSocket against the *viewer's* loopback, which
+      // fails as "control socket connect timeout". Forward the public origin so
+      // the helper and WebSocket URLs stay same-origin and route back through
+      // this gate.
+      headers: {
+        ...req.headers,
+        'x-forwarded-proto': 'https',
+        'x-forwarded-host': req.headers.host,
+      },
     },
     (upRes) => {
       res.writeHead(upRes.statusCode || 502, upRes.headers);
@@ -110,7 +120,12 @@ server.on('upgrade', (req, socket, head) => {
   }
 
   const upstream = net.connect(TARGET_PORT, TARGET_HOST, () => {
-    const headers = Object.entries(req.headers)
+    const forwarded = {
+      ...req.headers,
+      'x-forwarded-proto': 'https',
+      'x-forwarded-host': req.headers.host,
+    };
+    const headers = Object.entries(forwarded)
       .map(([k, v]) => (Array.isArray(v) ? v.map((x) => `${k}: ${x}`).join('\r\n') : `${k}: ${v}`))
       .join('\r\n');
     upstream.write(`${req.method} ${req.url} HTTP/1.1\r\n${headers}\r\n\r\n`);
