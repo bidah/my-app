@@ -81,6 +81,28 @@ jobs:
             npm install
           fi
 
+      - name: Fingerprint native build inputs
+        id: fp
+        if: inputs.mode == 'build'
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          # @expo/fingerprint hashes exactly the inputs that affect the *native*
+          # build (dependencies, config plugins, native dirs) and deliberately
+          # ignores application JS, so a JS-only change still hits the cache.
+          HASH=$(npx --yes @expo/fingerprint fingerprint:generate --platform ios \
+            | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0,"utf8")).hash)')
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+          echo "native fingerprint: $HASH"
+
+      - name: Restore cached app build
+        id: appcache
+        if: inputs.mode == 'build'
+        uses: actions/cache/restore@v4
+        with:
+          path: build/simcast-app
+          key: simcast-app-${{ runner.os }}-${{ steps.fp.outputs.hash }}
+
       - name: Boot simulator
         timeout-minutes: 10
         id: sim
@@ -192,9 +214,9 @@ jobs:
             echo "Anyone with this link can drive the simulator."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Build and install the app
+      - name: Build app
         timeout-minutes: 60
-        if: inputs.mode == 'build'
+        if: inputs.mode == 'build' && steps.appcache.outputs.cache-hit != 'true'
         env:
           UDID: ${{ steps.sim.outputs.udid }}
         run: |
@@ -223,8 +245,42 @@ jobs:
 
           APP=$(find build/ios/Build/Products/Release-iphonesimulator -maxdepth 1 -name '*.app' | head -1)
           [ -n "$APP" ] || { echo "No .app produced"; exit 1; }
-          BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist")
 
+          # Park the bundle where the cache (and the install step) expect it.
+          rm -rf build/simcast-app
+          mkdir -p build/simcast-app
+          cp -R "$APP" build/simcast-app/
+
+      - name: Save app build to cache
+        if: inputs.mode == 'build' && steps.appcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/simcast-app
+          key: simcast-app-${{ runner.os }}-${{ steps.fp.outputs.hash }}
+
+      - name: Install and launch app
+        timeout-minutes: 15
+        if: inputs.mode == 'build'
+        env:
+          UDID: ${{ steps.sim.outputs.udid }}
+          CACHE_HIT: ${{ steps.appcache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          APP=$(find build/simcast-app -maxdepth 1 -name '*.app' | head -1)
+          [ -n "$APP" ] || { echo "No .app to install"; exit 1; }
+
+          if [ "$CACHE_HIT" = "true" ]; then
+            # The fingerprint ignores app JS, so a reused binary carries a stale
+            # bundle. Re-embed current JS rather than rebuilding natively.
+            echo "Reused cached native build; refreshing the JS bundle"
+            npx expo export:embed \
+              --platform ios \
+              --dev false \
+              --bundle-output "$APP/main.jsbundle" \
+              --assets-dest "$APP"
+          fi
+
+          BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist")
           xcrun simctl install "$UDID" "$APP"
           xcrun simctl launch "$UDID" "$BUNDLE_ID"
           echo "Launched $BUNDLE_ID"
