@@ -1,6 +1,6 @@
-// simcast-template-version: 17
+// native-sim-template-version: 17
 /**
- * simcast auth gate.
+ * native-sim auth gate.
  *
  * serve-sim ships no authentication, so exposing port 3200 through a public
  * tunnel would hand simulator control to anyone who guessed the URL. This is a
@@ -9,25 +9,25 @@
  * the control WebSocket) to serve-sim on localhost.
  *
  * It also multiplexes a second upstream onto the same tunnel: when
- * SIMCAST_AGENT_PORT is set, `/agent-device/*` is routed to the local
+ * NATIVE_SIM_AGENT_PORT is set, `/agent-device/*` is routed to the local
  * `agent-device proxy` instead of serve-sim, so one URL carries both the
  * human-facing stream and the agent-facing control API.
  */
 const http = require('node:http');
 const net = require('node:net');
 
-const TOKEN = process.env.SIMCAST_GATE_TOKEN || '';
-const TARGET_PORT = Number(process.env.SIMCAST_TARGET_PORT || 3200);
+const TOKEN = process.env.NATIVE_SIM_GATE_TOKEN || '';
+const TARGET_PORT = Number(process.env.NATIVE_SIM_TARGET_PORT || 3200);
 // 0 disables the agent-device route entirely, so a session started without
 // --agent exposes no extra surface at all.
-const AGENT_PORT = Number(process.env.SIMCAST_AGENT_PORT || 0);
+const AGENT_PORT = Number(process.env.NATIVE_SIM_AGENT_PORT || 0);
 const AGENT_PREFIX = '/agent-device';
 const TARGET_HOST = '127.0.0.1';
-const PORT = Number(process.env.SIMCAST_GATE_PORT || 3199);
-const COOKIE = 'simcast_k';
+const PORT = Number(process.env.NATIVE_SIM_GATE_PORT || 3199);
+const COOKIE = 'native_sim_k';
 
 if (!TOKEN) {
-  console.error('SIMCAST_GATE_TOKEN is required — refusing to proxy an unauthenticated simulator');
+  console.error('NATIVE_SIM_GATE_TOKEN is required — refusing to proxy an unauthenticated simulator');
   process.exit(1);
 }
 
@@ -73,15 +73,15 @@ function authorize(req) {
   return false;
 }
 
-const DENIED = `<!doctype html><meta charset=utf-8><title>simcast</title>
+const DENIED = `<!doctype html><meta charset=utf-8><title>native-sim</title>
 <style>body{font:14px/1.6 -apple-system,system-ui,sans-serif;margin:15vh auto;max-width:34rem;padding:0 1.5rem;color:#111}
 @media(prefers-color-scheme:dark){body{background:#111;color:#eee}}code{background:#8882;padding:.15em .4em;border-radius:4px}</style>
-<h1>🔒 simcast</h1>
+<h1>🔒 native-sim</h1>
 <p>This simulator stream needs the access key from the link the CLI printed.</p>
 <p>Ask whoever started the session for the full URL — the one ending in <code>?k=…</code>.</p>`;
 
 const server = http.createServer((req, res) => {
-  if (req.url.startsWith('/__simcast/healthz')) {
+  if (req.url.startsWith('/__native-sim/healthz')) {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ ok: true, target: TARGET_PORT, agent: AGENT_PORT || null }));
     return;
@@ -180,5 +180,5 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  console.log(`simcast gate on :${PORT} -> :${TARGET_PORT}${AGENT_PORT ? ` (agent-device -> :${AGENT_PORT})` : ''}`);
+  console.log(`native-sim gate on :${PORT} -> :${TARGET_PORT}${AGENT_PORT ? ` (agent-device -> :${AGENT_PORT})` : ''}`);
 });
